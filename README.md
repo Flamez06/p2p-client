@@ -1,0 +1,1 @@
+run prog with g++ peer.cpp helper.cpp -o peer -lws2_32
