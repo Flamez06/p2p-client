@@ -1,5 +1,33 @@
 #include "helper.h"
+#include<vector>
 using namespace std;
+
+void parseMessage(const string& message, string& type, string& portStr) {
+    type.clear();
+    portStr.clear();
+    string word = "";
+    for (char c : message) {    
+        if (c != ' ') {
+            word += c;
+        } else {
+            if (type.empty()) {
+                type = word;
+            } else if (portStr.empty()) {
+                portStr = word;
+            }
+            word = "";
+        }
+    }
+    if (!word.empty()) {
+        if (type.empty()) {
+            type = word;
+        } else if (portStr.empty()) {
+            portStr = word;
+        }
+    }
+}
+
+
 bool sendAll(SOCKET sock, const char* data, int length){
     int totalSent = 0;
     while (totalSent < length){
@@ -23,6 +51,30 @@ bool sendMessage(SOCKET sock, const string& message){
         return false;
     }
     return true;
+}
+
+// MESSAGE PROTOCOL
+// 4 BYTES | MESSAGE TYPE
+// 4 BYTES | PIECE INDEX
+// 4 BYTES | PIECE LENGTH 
+// N BYTES | MESSAGE DATA
+bool sendPiece(SOCKET sock,uint32_t pieceIndex,const vector<char>& piece){
+    uint32_t netType = htonl(MSG_PIECE);
+    if(!sendAll(sock,(char*)&netType,sizeof(netType))){
+        return false;
+    }
+    uint32_t netPI = htonl(pieceIndex);
+    if(!sendAll(sock,(char*)&netPI,sizeof(netPI))){
+        return false;
+    }
+    uint32_t length = piece.size();
+    uint32_t netLength = htonl(length);
+    if(!sendAll(sock,(char*)&netLength,sizeof(netLength))){
+        return false;
+    }
+    if(!sendAll(sock,piece.data(),length)){
+        return false;
+    }
 }
 
 bool recvAll(SOCKET sock, char* buffer, int length){

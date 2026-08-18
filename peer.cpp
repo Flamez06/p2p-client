@@ -1,86 +1,101 @@
+#include "fileManager.h"
 #include "helper.h"
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 #include <winsock2.h>
 
 using namespace std;
 
-void listenForPeers(int port) {
-    SOCKET sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (sockfd == INVALID_SOCKET) {
-        cout << "Socket creation failed." << endl;
-        return;
+// Mutex for locking stuff
+mutex peerMutex;
+
+struct peerInfo {
+    string ip;
+    int port;
+};
+
+// Store known peers in a vector
+vector<peerInfo> knownPeers;
+
+bool addPeer(const string &ip, int port) {
+    lock_guard<mutex> lock(peerMutex);
+    for (const auto &peer : knownPeers) {
+        if (peer.ip == ip && peer.port == port) {
+            return false; // Peer already exists
+        }
     }
+    peerInfo newPeer{ip, port};
+    knownPeers.push_back(newPeer);
+    return true;
+}
 
-    sockaddr_in srv{};
-    srv.sin_family = AF_INET;
-    srv.sin_port = htons(port);
-    srv.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(sockfd, (sockaddr *)&srv, sizeof(srv)) == SOCKET_ERROR) {
-        cout << "Socket binding failed." << endl;
-        closesocket(sockfd);
-        return;
-    }
-    // Start listening
-    if (listen(sockfd, 5) == SOCKET_ERROR) {
-        cout << "Listening failed." << endl;
-        closesocket(sockfd);
-        return;
-    }
-    cout << "Listening on port " << port << endl;
-
-    sockaddr_in connectedAddr{};
-    int connectedAddrLen = sizeof(connectedAddr);
-    SOCKET connectedSocket = accept(sockfd, (sockaddr *)&connectedAddr, &connectedAddrLen);
-
-    if (connectedSocket == INVALID_SOCKET) {
-        cout << "Accepting connection failed." << endl;
-        closesocket(sockfd);
-        return;
-    }
-    cout << "Peer connected from " << inet_ntoa(connectedAddr.sin_addr) << ":" << ntohs(connectedAddr.sin_port) << endl;
-
+void handlePeer(SOCKET peerSocket, string peerIP) {
     string receivedMessage;
-    if (!recvMessage(connectedSocket, receivedMessage)) {
+    if (!recvMessage(peerSocket, receivedMessage)) {
         cout << "Receive failed." << endl;
     } else {
+        string type, portStr;
         cout << "Received from peer: " << receivedMessage << endl;
-        string type;
-        string portStr;
-        string word = "";
-        for (char c : receivedMessage) {
-            if (c != ' ') {
-                word += c;
-            } else {
-                if (type.empty()) {
-                    type = word;
-                } else if (portStr.empty()) {
-                    portStr = word;
-                }
-                word = "";
-            }
-        }
-        if (!word.empty()) {
-            if (type.empty()) {
-                type = word;
-            } else if (portStr.empty()) {
-                portStr = word;
-            }
-        }
+        parseMessage(receivedMessage, type, portStr);
 
         if (type == "HANDSHAKE") {
             string message = "HANDSHAKE_OK";
-            sendMessage(connectedSocket, message);
+            addPeer(peerIP, stoi(portStr));
+            sendMessage(peerSocket, message);
             message = "Connected to peer on port " + portStr;
             cout << message << endl;
         }
     }
 
-    closesocket(connectedSocket);
-    closesocket(sockfd);
+    closesocket(peerSocket);
+}
+
+void listenForPeers(int myPort) {
+    while (true) {
+        SOCKET sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sockfd == INVALID_SOCKET) {
+            cout << "Socket creation failed." << endl;
+            return;
+        }
+
+        sockaddr_in srv{};
+        srv.sin_family = AF_INET;
+        srv.sin_port = htons(myPort);
+        srv.sin_addr.s_addr = INADDR_ANY;
+
+        if (bind(sockfd, (sockaddr *)&srv, sizeof(srv)) == SOCKET_ERROR) {
+            cout << "Socket binding failed." << endl;
+            closesocket(sockfd);
+            return;
+        }
+        // Start listening
+        if (listen(sockfd, 5) == SOCKET_ERROR) {
+            cout << "Listening failed." << endl;
+            closesocket(sockfd);
+            return;
+        }
+        cout << "Listening on port " << myPort << endl;
+
+        sockaddr_in connectedAddr{};
+        int connectedAddrLen = sizeof(connectedAddr);
+        SOCKET connectedSocket = accept(sockfd, (sockaddr *)&connectedAddr, &connectedAddrLen);
+
+        if (connectedSocket == INVALID_SOCKET) {
+            cout << "Accepting connection failed." << endl;
+            closesocket(sockfd);
+            return;
+        } else {
+            cout << "Peer connected from " << inet_ntoa(connectedAddr.sin_addr) << ":" << ntohs(connectedAddr.sin_port)
+                 << endl;
+            thread peerThread(handlePeer, connectedSocket, inet_ntoa(connectedAddr.sin_addr));
+            peerThread.detach();
+        }
+        closesocket(sockfd);
+    }
 }
 
 void connectToPeer(string peerIP, int peerPort, int myPort) {
@@ -126,6 +141,12 @@ void connectToPeer(string peerIP, int peerPort, int myPort) {
 }
 
 int main(int argc, char *argv[]) {
+    fileMetadata mdata;
+    createFileMetadata("test.txt",mdata);
+    for(uint32_t i = 0; i<mdata.pieceCount; i++){
+        cout << "Piece hash " << i << " : " << mdata.pieceHashes[i] << endl;
+    }
+    
     if (argc != 2 && argc != 4) {
         cout << "Usage:" << endl;
         cout << "  peer.exe <port>" << endl;
